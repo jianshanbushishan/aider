@@ -24,7 +24,13 @@ from .utils import is_image_file
 
 class AutoCompleter(Completer):
     def __init__(
-        self, root, rel_fnames, addable_rel_fnames, commands, encoding, abs_read_only_fnames=None
+        self,
+        root,
+        rel_fnames,
+        addable_rel_fnames,
+        commands,
+        encoding,
+        abs_read_only_fnames=None,
     ):
         self.addable_rel_fnames = addable_rel_fnames
         self.rel_fnames = rel_fnames
@@ -122,7 +128,9 @@ class AutoCompleter(Completer):
                 if rel_fnames:
                     for rel_fname in rel_fnames:
                         yield Completion(
-                            f"`{rel_fname}`", start_position=-len(last_word), display=rel_fname
+                            f"`{rel_fname}`",
+                            start_position=-len(last_word),
+                            display=rel_fname,
                         )
                 else:
                     yield Completion(
@@ -225,9 +233,13 @@ class InputOutput:
         with open(str(filename), "w", encoding=self.encoding) as f:
             f.write(content)
 
-    def get_input(self, root, rel_fnames, addable_rel_fnames, commands, abs_read_only_fnames=None):
+    def get_input(
+        self, root, rel_fnames, addable_rel_fnames, commands, abs_read_only_fnames=None
+    ):
         if self.pretty:
-            style = dict(style=self.user_input_color) if self.user_input_color else dict()
+            style = (
+                dict(style=self.user_input_color) if self.user_input_color else dict()
+            )
             self.console.rule(**style)
         else:
             print()
@@ -329,14 +341,17 @@ class InputOutput:
 
     def user_input(self, inp, log_only=True):
         if not log_only:
-            style = dict(style=self.user_input_color) if self.user_input_color else dict()
+            style = (
+                dict(style=self.user_input_color) if self.user_input_color else dict()
+            )
             self.console.print(Text(inp), **style)
 
-        prefix = "####"
+        prefix = "##"
         if inp:
             hist = inp.splitlines()
         else:
-            hist = ["<blank>"]
+            # hist = ["<blank>"]
+            return
 
         hist = f"  \n{prefix} ".join(hist)
 
@@ -391,7 +406,9 @@ class InputOutput:
         if message.strip():
             if "\n" in message:
                 for line in message.splitlines():
-                    self.append_chat_history(line, linebreak=True, blockquote=True, strip=strip)
+                    self.append_chat_history(
+                        line, linebreak=True, blockquote=True, strip=strip
+                    )
             else:
                 if strip:
                     hist = message.strip()
@@ -411,7 +428,9 @@ class InputOutput:
 
         if not log_only:
             messages = list(map(Text, messages))
-            style = dict(color=self.tool_output_color) if self.tool_output_color else dict()
+            style = (
+                dict(color=self.tool_output_color) if self.tool_output_color else dict()
+            )
             style["reverse"] = bold
             style = RichStyle(**style)
             self.console.print(*messages, style=style)

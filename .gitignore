@@ -2,6 +2,7 @@
 .vscode/
 aider.code-workspace
 *.pyc
+*.lock
 .aider*
 aider_chat.egg-info/
 build
