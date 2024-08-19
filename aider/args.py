@@ -20,7 +20,19 @@ def default_env_file(git_root):
     return os.path.join(git_root, ".env") if git_root else ".env"
 
 
+import os
+
+def find_git_root(start_path):
+    current_path = start_path
+    while current_path != os.path.dirname(current_path):
+        if os.path.exists(os.path.join(current_path, '.git')):
+            return current_path
+        current_path = os.path.dirname(current_path)
+    return None
+
 def get_parser(default_config_files, git_root):
+    git_root = find_git_root(os.getcwd())
+    subtree_only = git_root is not None and git_root != os.getcwd()
     parser = configargparse.ArgumentParser(
         description="aider is GPT powered coding in your terminal",
         add_config_file_help=True,
@@ -352,7 +364,7 @@ def get_parser(default_config_files, git_root):
         "--subtree-only",
         action="store_true",
         help="Only consider files in the current subtree of the git repository",
-        default=False,
+        default=subtree_only,
     )
     group.add_argument(
         "--auto-commits",
