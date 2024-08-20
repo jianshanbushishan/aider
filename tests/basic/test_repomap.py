@@ -1,11 +1,14 @@
 import os
+import time
 import unittest
+
+import git
 
 from aider.dump import dump  # noqa: F401
 from aider.io import InputOutput
 from aider.models import Model
 from aider.repomap import RepoMap
-from aider.utils import IgnorantTemporaryDirectory
+from aider.utils import GitTemporaryDirectory, IgnorantTemporaryDirectory
 
 
 class TestRepoMap(unittest.TestCase):
@@ -36,6 +39,118 @@ class TestRepoMap(unittest.TestCase):
             self.assertIn("test_file2.py", result)
             self.assertIn("test_file3.md", result)
             self.assertIn("test_file4.json", result)
+
+            # close the open cache files, so Windows won't error
+            del repo_map
+
+    def test_repo_map_refresh_files(self):
+        with GitTemporaryDirectory() as temp_dir:
+            repo = git.Repo(temp_dir)
+
+            # Create three source files with one function each
+            file1_content = "def function1():\n    return 'Hello from file1'\n"
+            file2_content = "def function2():\n    return 'Hello from file2'\n"
+            file3_content = "def function3():\n    return 'Hello from file3'\n"
+
+            with open(os.path.join(temp_dir, "file1.py"), "w") as f:
+                f.write(file1_content)
+            with open(os.path.join(temp_dir, "file2.py"), "w") as f:
+                f.write(file2_content)
+            with open(os.path.join(temp_dir, "file3.py"), "w") as f:
+                f.write(file3_content)
+
+            # Add files to git
+            repo.index.add(["file1.py", "file2.py", "file3.py"])
+            repo.index.commit("Initial commit")
+
+            # Initialize RepoMap with refresh="files"
+            io = InputOutput()
+            repo_map = RepoMap(main_model=self.GPT35, root=temp_dir, io=io, refresh="files")
+            other_files = [
+                os.path.join(temp_dir, "file1.py"),
+                os.path.join(temp_dir, "file2.py"),
+                os.path.join(temp_dir, "file3.py"),
+            ]
+
+            # Get initial repo map
+            initial_map = repo_map.get_repo_map([], other_files)
+            dump(initial_map)
+            self.assertIn("function1", initial_map)
+            self.assertIn("function2", initial_map)
+            self.assertIn("function3", initial_map)
+
+            # Add a new function to file1.py
+            with open(os.path.join(temp_dir, "file1.py"), "a") as f:
+                f.write("\ndef functionNEW():\n    return 'Hello NEW'\n")
+
+            # Get another repo map
+            second_map = repo_map.get_repo_map([], other_files)
+            self.assertEqual(
+                initial_map, second_map, "RepoMap should not change with refresh='files'"
+            )
+
+            other_files = [
+                os.path.join(temp_dir, "file1.py"),
+                os.path.join(temp_dir, "file2.py"),
+            ]
+            second_map = repo_map.get_repo_map([], other_files)
+            self.assertIn("functionNEW", second_map)
+
+            # close the open cache files, so Windows won't error
+            del repo_map
+
+    def test_repo_map_refresh_auto(self):
+        with GitTemporaryDirectory() as temp_dir:
+            repo = git.Repo(temp_dir)
+
+            # Create two source files with one function each
+            file1_content = "def function1():\n    return 'Hello from file1'\n"
+            file2_content = "def function2():\n    return 'Hello from file2'\n"
+
+            with open(os.path.join(temp_dir, "file1.py"), "w") as f:
+                f.write(file1_content)
+            with open(os.path.join(temp_dir, "file2.py"), "w") as f:
+                f.write(file2_content)
+
+            # Add files to git
+            repo.index.add(["file1.py", "file2.py"])
+            repo.index.commit("Initial commit")
+
+            # Initialize RepoMap with refresh="auto"
+            io = InputOutput()
+            repo_map = RepoMap(main_model=self.GPT35, root=temp_dir, io=io, refresh="auto")
+            chat_files = []
+            other_files = [os.path.join(temp_dir, "file1.py"), os.path.join(temp_dir, "file2.py")]
+
+            # Force the RepoMap computation to take more than 1 second
+            original_get_ranked_tags = repo_map.get_ranked_tags
+
+            def slow_get_ranked_tags(*args, **kwargs):
+                time.sleep(1.1)  # Sleep for 1.1 seconds to ensure it's over 1 second
+                return original_get_ranked_tags(*args, **kwargs)
+
+            repo_map.get_ranked_tags = slow_get_ranked_tags
+
+            # Get initial repo map
+            initial_map = repo_map.get_repo_map(chat_files, other_files)
+            self.assertIn("function1", initial_map)
+            self.assertIn("function2", initial_map)
+            self.assertNotIn("functionNEW", initial_map)
+
+            # Add a new function to file1.py
+            with open(os.path.join(temp_dir, "file1.py"), "a") as f:
+                f.write("\ndef functionNEW():\n    return 'Hello NEW'\n")
+
+            # Get another repo map without force_refresh
+            second_map = repo_map.get_repo_map(chat_files, other_files)
+            self.assertEqual(
+                initial_map, second_map, "RepoMap should not change without force_refresh"
+            )
+
+            # Get a new repo map with force_refresh
+            final_map = repo_map.get_repo_map(chat_files, other_files, force_refresh=True)
+            self.assertIn("functionNEW", final_map)
+            self.assertNotEqual(initial_map, final_map, "RepoMap should change with force_refresh")
 
             # close the open cache files, so Windows won't error
             del repo_map
@@ -273,7 +388,7 @@ class TestRepoMapAllLanguages(unittest.TestCase):
                 "test.js",
                 "function greet(name) {\n    console.log(`Hello, ${name}!`);\n}\n",
             ),
-            "ocaml": ("test.ml", "let greet name =\n  Printf.printf \"Hello, %s!\\n\" name\n"),
+            "ocaml": ("test.ml", 'let greet name =\n  Printf.printf "Hello, %s!\\n" name\n'),
             "php": (
                 "test.php",
                 '<?php\nfunction greet($name) {\n    echo "Hello, $name!";\n}\n?>\n',

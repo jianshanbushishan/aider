@@ -514,3 +514,44 @@ class TestMain(TestCase):
             )
 
             self.assertEqual(coder.main_model.info["max_input_tokens"], 1234)
+
+    def test_sonnet_and_cache_options(self):
+        with GitTemporaryDirectory():
+            with patch("aider.coders.base_coder.RepoMap") as MockRepoMap:
+                mock_repo_map = MagicMock()
+                mock_repo_map.max_map_tokens = 1000  # Set a specific value
+                MockRepoMap.return_value = mock_repo_map
+
+                main(
+                    ["--sonnet", "--cache", "--exit", "--yes"],
+                    input=DummyInput(),
+                    output=DummyOutput(),
+                )
+
+                MockRepoMap.assert_called_once()
+                call_args, call_kwargs = MockRepoMap.call_args
+                self.assertEqual(
+                    call_kwargs.get("refresh"), "files"
+                )  # Check the 'refresh' keyword argument
+
+    def test_sonnet_and_cache_prompts_options(self):
+        with GitTemporaryDirectory():
+            coder = main(
+                ["--sonnet", "--cache-prompts", "--exit", "--yes"],
+                input=DummyInput(),
+                output=DummyOutput(),
+                return_coder=True,
+            )
+
+            self.assertTrue(coder.add_cache_headers)
+
+    def test_4o_and_cache_options(self):
+        with GitTemporaryDirectory():
+            coder = main(
+                ["--4o", "--cache", "--exit", "--yes"],
+                input=DummyInput(),
+                output=DummyOutput(),
+                return_coder=True,
+            )
+
+            self.assertFalse(coder.add_cache_headers)

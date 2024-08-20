@@ -66,8 +66,8 @@ class ChatChunks:
         return (
             self.system
             + self.examples
-            + self.repo
             + self.readonly_files
+            + self.repo
             + self.done
             + self.chat_files
             + self.cur
@@ -130,6 +130,7 @@ class Coder:
     message_cost = 0.0
     message_tokens_sent = 0
     message_tokens_received = 0
+    add_cache_headers = False
 
     @classmethod
     def create(
@@ -205,18 +206,22 @@ class Coder:
         # Model
         main_model = self.main_model
         weak_model = main_model.weak_model
-        prefix = "Model:"
-        output = f" {main_model.name}"
-        if main_model.cache_control and self.cache_prompts:
-            output += "⚡"
-        output += " with"
-        if main_model.info.get("supports_assistant_prefill"):
-            output += " ♾️"
-        output += f" {self.edit_format} edit format"
+
         if weak_model is not main_model:
-            prefix = "Models:"
-            output += f", weak model {weak_model.name}"
-        lines.append(prefix + output)
+            prefix = "Main model"
+        else:
+            prefix = "Model"
+
+        output = f"{prefix}: {main_model.name} with {self.edit_format} edit format"
+        if self.add_cache_headers:
+            output += ", prompt cache"
+        if main_model.info.get("supports_assistant_prefill"):
+            output += ", infinite output"
+        lines.append(output)
+
+        if weak_model is not main_model:
+            output = f"Weak model: {weak_model.name}"
+            lines.append(output)
 
         # Repo
         if self.repo:
@@ -293,7 +298,6 @@ class Coder:
         self.aider_commit_hashes = set()
         self.rejected_urls = set()
         self.abs_root_path_cache = {}
-        self.cache_prompts = cache_prompts
 
         if not fnames:
             fnames = []
@@ -346,6 +350,9 @@ class Coder:
             self.console = Console(force_terminal=False, no_color=True)
 
         self.main_model = main_model
+
+        if cache_prompts and self.main_model.cache_control:
+            self.add_cache_headers = True
 
         self.show_diffs = show_diffs
 
@@ -916,12 +923,8 @@ class Coder:
         if user_lang:
             platform_text += f"- Language: {user_lang}\n"
 
-        if self.cache_prompts:
-            dt = datetime.now().astimezone().strftime("%Y-%m-%d")
-            platform_text += f"- Current date: {dt}"
-        else:
-            dt = datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M:%S%z")
-            platform_text += f"- Current date/time: {dt}"
+        dt = datetime.now().astimezone().strftime("%Y-%m-%d")
+        platform_text += f"- Current date: {dt}"
 
         prompt = prompt.format(
             fence=self.fence,
@@ -1027,7 +1030,7 @@ class Coder:
 
     def format_messages(self):
         chunks = self.format_chat_chunks()
-        if self.cache_prompts and self.main_model.cache_control:
+        if self.add_cache_headers:
             chunks.add_cache_control_headers()
 
         msgs = chunks.all_messages()
@@ -1472,56 +1475,101 @@ class Coder:
     def calculate_and_show_tokens_and_cost(self, messages, completion=None):
         prompt_tokens = 0
         completion_tokens = 0
-        cached_tokens = 0
-        cost = 0
+        cache_hit_tokens = 0
+        cache_write_tokens = 0
 
         if completion and hasattr(completion, "usage") and completion.usage is not None:
             prompt_tokens = completion.usage.prompt_tokens
             completion_tokens = completion.usage.completion_tokens
-            cached_tokens = getattr(completion.usage, "prompt_cache_hit_tokens", 0) or getattr(
+            cache_hit_tokens = getattr(completion.usage, "prompt_cache_hit_tokens", 0) or getattr(
                 completion.usage, "cache_read_input_tokens", 0
             )
+            cache_write_tokens = getattr(completion.usage, "cache_creation_input_tokens", 0)
+
+            if hasattr(completion.usage, "cache_read_input_tokens") or hasattr(
+                completion.usage, "cache_creation_input_tokens"
+            ):
+                self.message_tokens_sent += prompt_tokens
+                self.message_tokens_sent += cache_hit_tokens
+                self.message_tokens_sent += cache_write_tokens
+            else:
+                self.message_tokens_sent += prompt_tokens
+
         else:
             prompt_tokens = self.main_model.token_count(messages)
             completion_tokens = self.main_model.token_count(self.partial_response_content)
+            self.message_tokens_sent += prompt_tokens
 
-        self.message_tokens_sent += prompt_tokens
         self.message_tokens_received += completion_tokens
 
-        if cached_tokens:
-            tokens_report = (
-                f"Tokens: {self.message_tokens_sent:,} sent, {cached_tokens:,} cached, "
-                f"{self.message_tokens_received:,} received."
-            )
-        else:
-            tokens_report = (
-                f"Tokens: {self.message_tokens_sent:,} sent,"
-                f" {self.message_tokens_received:,} received."
-            )
+        tokens_report = f"Tokens: {self.message_tokens_sent:,} sent"
 
-        if self.main_model.info.get("input_cost_per_token"):
-            cost += prompt_tokens * self.main_model.info.get("input_cost_per_token")
-            if self.main_model.info.get("output_cost_per_token"):
-                cost += completion_tokens * self.main_model.info.get("output_cost_per_token")
-            self.total_cost += cost
-            self.message_cost += cost
+        if cache_write_tokens:
+            tokens_report += f", {cache_write_tokens:,} cache write"
+        if cache_hit_tokens:
+            tokens_report += f", {cache_hit_tokens:,} cache hit"
+        tokens_report += f", {self.message_tokens_received:,} received."
 
-            def format_cost(value):
-                if value == 0:
-                    return "0.00"
-                magnitude = abs(value)
-                if magnitude >= 0.01:
-                    return f"{value:.2f}"
-                else:
-                    return f"{value:.{max(2, 2 - int(math.log10(magnitude)))}f}"
-
-            cost_report = (
-                f" Cost: ${format_cost(self.message_cost)} message,"
-                f" ${format_cost(self.total_cost)} session."
-            )
-            self.usage_report = tokens_report + cost_report
-        else:
+        if not self.main_model.info.get("input_cost_per_token"):
             self.usage_report = tokens_report
+            return
+
+        cost = 0
+
+        input_cost_per_token = self.main_model.info.get("input_cost_per_token") or 0
+        output_cost_per_token = self.main_model.info.get("output_cost_per_token") or 0
+        input_cost_per_token_cache_hit = (
+            self.main_model.info.get("input_cost_per_token_cache_hit") or 0
+        )
+
+        # deepseek
+        # prompt_cache_hit_tokens + prompt_cache_miss_tokens
+        #    == prompt_tokens == total tokens that were sent
+        #
+        # Anthropic
+        # cache_creation_input_tokens + cache_read_input_tokens + prompt
+        #    == total tokens that were
+
+        if input_cost_per_token_cache_hit:
+            # must be deepseek
+            cost += input_cost_per_token_cache_hit * cache_hit_tokens
+            cost += (prompt_tokens - input_cost_per_token_cache_hit) * input_cost_per_token
+        else:
+            # hard code the anthropic adjustments, no-ops for other models since cache_x_tokens==0
+            cost += cache_write_tokens * input_cost_per_token * 1.25
+            cost += cache_hit_tokens * input_cost_per_token * 0.10
+            cost += prompt_tokens * input_cost_per_token
+
+        cost += completion_tokens * output_cost_per_token
+
+        self.total_cost += cost
+        self.message_cost += cost
+
+        def format_cost(value):
+            if value == 0:
+                return "0.00"
+            magnitude = abs(value)
+            if magnitude >= 0.01:
+                return f"{value:.2f}"
+            else:
+                return f"{value:.{max(2, 2 - int(math.log10(magnitude)))}f}"
+
+        cost_report = (
+            f"Cost: ${format_cost(self.message_cost)} message,"
+            f" ${format_cost(self.total_cost)} session."
+        )
+
+        if self.add_cache_headers and self.stream:
+            warning = " Use --no-stream for accurate caching costs."
+            self.usage_report = tokens_report + "\n" + cost_report + warning
+            return
+
+        if cache_hit_tokens and cache_write_tokens:
+            sep = "\n"
+        else:
+            sep = " "
+
+        self.usage_report = tokens_report + sep + cost_report
 
     def show_usage_report(self):
         if self.usage_report:
