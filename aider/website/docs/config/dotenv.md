@@ -135,7 +135,7 @@ cog.outl("```")
 ## Only work with models that have meta-data available (default: True)
 #AIDER_SHOW_MODEL_WARNINGS=true
 
-## Max number of tokens to use for repo map, use 0 to disable (default: 1024)
+## Suggested number of tokens to use for repo map, use 0 to disable (default: 1024)
 #AIDER_MAP_TOKENS=
 
 ## Control how often the repo map is refreshed (default: auto)
@@ -143,6 +143,9 @@ cog.outl("```")
 
 ## Enable caching of prompts (default: False)
 #AIDER_CACHE_PROMPTS=false
+
+## Multiplier for map tokens when no files are specified (default: 2)
+#AIDER_MAP_MULTIPLIER_NO_FILES=true
 
 ## Maximum number of tokens to use for chat history. If not specified, uses the model's max_chat_history_tokens.
 #AIDER_MAX_CHAT_HISTORY_TOKENS=
